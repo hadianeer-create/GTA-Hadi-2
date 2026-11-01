@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HADI: VICE CITY - Layout & Rig Preview</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #000; font-family: Arial, Helvetica, sans-serif; }
+  #label { position: absolute; left: 16px; top: 12px; color: #fff; font-size: 20px; font-weight: bold; text-shadow: 0 2px 4px #000; letter-spacing: 1px; }
+  .tag { position: absolute; color: #fff; font-size: 13px; text-shadow: 0 1px 3px #000; transform: translateX(-50%); white-space: nowrap; }
+</style>
+<script type="importmap">{ "imports": { "three": "./node_modules/three/build/three.module.js" } }</script>
+</head>
+<body>
+<div id="label"></div>
+<script src="preview_data.js"></script>
+<script type="module">
+// Renders the exact primitives produced by the C++ simulation core (Source/HadiViceCity/.../Core).
+// Unreal (X fwd, Y right, Z up, cm) -> three.js (x right, y up, z back, m): (Y, Z, -X) / 100.
+import * as THREE from 'three';
+
+const params = new URLSearchParams(location.search);
+const view = params.get('view') || 'aerial';
+const night = params.get('night') === '1';
+const D = window.HADI_DATA;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = night ? 1.1 : 1.0;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(night ? 0x0a1028 : 0x8ec5ef);
+scene.fog = new THREE.Fog(scene.background, view === 'aerial' ? 1200 : 250, view === 'aerial' ? 4500 : 1400);
+
+const f = (x, y, z) => new THREE.Vector3(y / 100, z / 100, -x / 100);   // positions (cm -> m)
+const dir = (x, y, z) => new THREE.Vector3(y, z, -x);                      // directions
+const MAT = { Matte: 0, Painted: 1, Glossy: 2, Metal: 3, Glass: 4, GlassClear: 5, WindowLit: 6, Neon: 7, Light: 8, Water: 9, Foliage: 10, Sand: 11, Asphalt: 12 };
+const geos = [new THREE.BoxGeometry(1, 1, 1), new THREE.CylinderGeometry(0.5, 0.5, 1, 18), new THREE.SphereGeometry(0.5, 18, 12), new THREE.ConeGeometry(0.5, 1, 18)];
+
+function makeMaterial(mat, r, g, b) {
+  const c = new THREE.Color().setRGB(r, g, b, THREE.SRGBColorSpace);
+  const p = { color: c, roughness: 0.8, metalness: 0.0 };
+  switch (mat) {
+    case MAT.Painted: p.roughness = 0.6; break;
+    case MAT.Glossy: p.roughness = 0.25; p.metalness = 0.15; break;
+    case MAT.Metal: p.roughness = 0.35; p.metalness = 0.85; break;
+    case MAT.Glass: p.roughness = 0.08; p.metalness = 0.6; break;
+    case MAT.GlassClear: p.roughness = 0.05; p.transparent = true; p.opacity = 0.35; break;
+    case MAT.WindowLit: p.color = new THREE.Color().setRGB(0.1, 0.15, 0.2, THREE.SRGBColorSpace); p.roughness = 0.1; p.metalness = 0.5;
+      p.emissive = c; p.emissiveIntensity = night ? 1.6 : 0.0; break;
+    case MAT.Neon: p.emissive = c; p.emissiveIntensity = night ? 3.0 : 0.35; break;
+    case MAT.Light: p.emissive = c; p.emissiveIntensity = night ? 3.0 : 0.1; break;
+    case MAT.Water: p.roughness = 0.08; p.metalness = 0.25; break;
+    case MAT.Foliage: p.roughness = 0.85; break;
+    case MAT.Sand: p.roughness = 1.0; break;
+    case MAT.Asphalt: p.roughness = 0.95; break;
+  }
+  return new THREE.MeshStandardMaterial(p);
+}
+
+function addPrims(list, offset) {
+  const groups = new Map();
+  for (const p of list) {
+    const key = `${p[0]}|${p[1]}|${p[2]}|${p[3]}|${p[4]}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  const m = new THREE.Matrix4();
+  for (const [, items] of groups) {
+    const [shape, mat, r, g, b] = items[0];
+    const mesh = new THREE.InstancedMesh(geos[shape], makeMaterial(mat, r, g, b), items.length);
+    items.forEach((p, i) => {
+      const [, , , , , cx, cy, cz, sx, sy, sz, xx, xy, xz, yx, yy, yz, zx, zy, zz] = p;
+      const ax = dir(yx, yy, yz).multiplyScalar(sy / 100);   // three local x  <- UE local Y
+      const ay = dir(zx, zy, zz).multiplyScalar(sz / 100);   // three local y  <- UE local Z
+      const az = dir(xx, xy, xz).multiplyScalar(-sx / 100);  // three local z  <- -UE local X
+      const pos = f(cx + (offset ? offset.x : 0), cy + (offset ? offset.y : 0), cz);
+      m.set(ax.x, ay.x, az.x, pos.x, ax.y, ay.y, az.y, pos.y, ax.z, ay.z, az.z, pos.z, 0, 0, 0, 1);
+      mesh.setMatrixAt(i, m);
+    });
+    const big = items.length === 1 && Math.max(items[0][8], items[0][9]) > 100000;
+    mesh.castShadow = !big && mat !== MAT.Water;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+  }
+}
+
+// Lights.
+const hemi = new THREE.HemisphereLight(night ? 0x203060 : 0xcfe6ff, night ? 0x101018 : 0x8a7a60, night ? 0.25 : 1.1);
+scene.add(hemi);
+const sun = new THREE.DirectionalLight(night ? 0x8090ff : 0xfff1dc, night ? 0.25 : 2.6);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+sun.shadow.bias = -0.0004;
+scene.add(sun);
+scene.add(sun.target);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, view === 'rig' ? 0.1 : 0.5, 20000);
+const label = document.getElementById('label');
+
+function setShadowArea(center, size) {
+  sun.position.copy(center).add(new THREE.Vector3(-0.45, 1.0, 0.35).multiplyScalar(size * 1.5));
+  sun.target.position.copy(center);
+  const c = sun.shadow.camera;
+  c.left = -size; c.right = size; c.top = size; c.bottom = -size; c.near = 1; c.far = size * 4;
+  c.updateProjectionMatrix();
+}
+
+if (view === 'rig') {
+  scene.fog = null;
+  scene.background = new THREE.Color(0x30343c);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(40, 12), new THREE.MeshStandardMaterial({ color: 0x6a6e76, roughness: 0.9 }));
+  floor.rotation.x = -Math.PI / 2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+  const spacing = 110;
+  const n = D.rig.length;
+  D.rig.forEach((pose, idx) => { const i = n - 1 - idx;
+    // Lay poses out along UE +Y (screen right), facing UE -X... rotate so Hadi faces the camera.
+    const off = { x: 0, y: (i - (n - 1) / 2) * spacing };  // camera on +X looking at -X: +Y is screen-left
+    addPrims(pose.prims, off);
+    const tag = document.createElement('div');
+    tag.className = 'tag';
+    tag.textContent = pose.name;
+    tag.dataset.y = off.y;
+    document.body.appendChild(tag);
+  });
+  camera.fov = 26;
+  camera.updateProjectionMatrix();
+  // Camera in front of the row (Hadi faces +X), fitted to the row width.
+  const halfWidthM = (n * spacing) / 2 / 100;
+  const dist = halfWidthM / Math.tan((camera.fov * camera.aspect) * Math.PI / 360) * 100 * 1.05;
+  camera.position.copy(f(dist, 0, 260));
+  camera.lookAt(f(0, 0, 100));
+  setShadowArea(f(0, 0, 0), 9);
+  label.textContent = 'HADI - procedural rig, animation states, outfits & expressions (from C++ core)';
+  renderer.render(scene, camera);
+  document.querySelectorAll('.tag').forEach(t => {
+    const p = f(0, Number(t.dataset.y), 205).project(camera);
+    t.style.left = ((p.x + 1) / 2 * innerWidth) + 'px';
+    t.style.top = ((1 - p.y) / 2 * innerHeight) + 'px';
+  });
+} else {
+  addPrims(D.prims, null);
+  const views = {
+    aerial: { pos: [-90000, 72000, 52000], look: [-8000, -2000, 0], shadow: [0, 0, 0, 900], text: 'Coral Key - aerial (south-east)' },
+    street: { pos: [-2500, 22650, 190], look: [8000, 21200, 600], shadow: [3000, 21500, 0, 160], text: 'Seabreeze Boulevard - deco hotels, looking north' },
+    beach: { pos: [2000, 31500, 260], look: [9000, 25500, 700], shadow: [6000, 27000, 0, 160], text: 'Coral Bay Beach & promenade' },
+    neon: { pos: [27500, 13000, 900], look: [36000, 8500, 600], shadow: [32000, 8000, 0, 160], text: 'Neon Mile' },
+    marina: { pos: [-15000, -36000, 1500], look: [-28000, -27000, 200], shadow: [-27000, -29000, 0, 200], text: 'Marina Row & Vice Causeway' },
+    spawn: { pos: [-1200, 23000, 230], look: [6000, 21300, 260], shadow: [4000, 21500, 0, 120], text: 'Prologue start - outside Hadi\'s apartment' },
+    southpoint: { pos: [-75000, 6000, 3000], look: [-54000, -12000, 6000], shadow: [-55000, -10000, 0, 300], text: 'South Point towers' },
+  };
+  const v = views[view] || views.aerial;
+  camera.position.copy(f(...v.pos));
+  camera.lookAt(f(...v.look));
+  setShadowArea(f(v.shadow[0], v.shadow[1], v.shadow[2]), v.shadow[3]);
+  label.textContent = v.text + (night ? ' (night)' : '');
+  if (night) {
+    // A few real lights near the camera to approximate street lighting.
+    for (let i = 0; i < 12; i++) {
+      const l = new THREE.PointLight(0xffd6a0, 40, 30, 2);
+      const dir = new THREE.Vector3().subVectors(f(...v.look), f(...v.pos)).normalize();
+      l.position.copy(f(...v.pos)).addScaledVector(dir, 15 + i * 25).add(new THREE.Vector3(0, 6, 0));
+      scene.add(l);
+    }
+  }
+}
+renderer.render(scene, camera);
+window.READY = true;
+</script>
+</body>
+</html>

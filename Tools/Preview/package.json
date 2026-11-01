@@ -1,0 +1,12 @@
+{
+  "name": "hadi-vice-city-preview",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Browser previewer for the HADI: VICE CITY simulation core (city layout + Hadi rig poses).",
+  "scripts": {
+    "render": "node render.mjs shots"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  }
+}

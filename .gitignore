@@ -1,0 +1,25 @@
+# Unreal Engine
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+Build/
+.vs/
+.vscode/
+.idea/
+*.sln
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.xcworkspace
+
+# Tools
+Tools/CoreTests/.build/
+Tools/Preview/node_modules/
+Tools/Preview/preview_data.js
+Tools/Preview/shots/
+Tools/Preview/package-lock.json
+__pycache__/
+*.pyc
+Tools/Preview/.build/
